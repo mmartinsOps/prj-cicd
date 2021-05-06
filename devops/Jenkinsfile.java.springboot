@@ -1,0 +1,349 @@
+node('master') {
+  stage('Checkout Devops Resources'){
+    checkout scm
+    globalEnv = readJSON file: 'environment/git/variables.json'
+    preamble = load 'devops-resources/print-project.groovy'
+    common = load 'devops-resources/common.groovy'
+    imageBuilder = load 'devops-resources/image-builder.groovy'
+    deploy = load 'devops-resources/deploy.groovy'
+    gitlabToken = globalEnv[
+      "gitlab-token"
+    ]
+    namespace = globalEnv["devops-namespace"]
+
+    echo "DevOps namespace: ${namespace}"
+    echo "projetos/${env.appName}"
+
+    if (fileExists("configuration/maven")) {
+      stash name: "devops-resouces-mvn-settings", includes: "configuration/maven/"
+    }
+
+    if (fileExists("projetos/${env.appName}/")) {
+      stash name: "devops-resources-project", includes: "projetos/${env.appName}/"
+    }
+  }
+}
+
+pipeline {
+  agent {
+    kubernetes {
+      label "jenkins-agent-java-8"
+      cloud "openshift"
+      inheritFrom "maven"
+      containerTemplate {
+        name "jnlp"
+        image "image-registry.openshift-image-registry.svc:5000/${namespace}/jenkins-agent-java-8:latest"
+      }
+    }
+  }
+  
+  stages {
+    stage('Preamble') {
+      steps {
+        script {
+          appName = env.appName;
+          appBranch = common.appBranchNormalizer(env.refs);
+          appVersion = "${BUILD_ID}";
+          baseImageStream = env.baseImageStream;
+          appPath = env.appPath;
+          firstEnv = common.discoveryFirsEnvironment("${appBranch}");
+          rootProjectPath = "projetos/${appName}/${firstEnv}";
+          projectName = "";
+          appEnvPath="${rootProjectPath}/app-env";
+          bcEnvPath="${rootProjectPath}/bc-env";
+          dcEnvPath="${rootProjectPath}/dc-env";
+          patchEnvPath="${rootProjectPath}/patches";
+          templateEnvPath="${rootProjectPath}/templates";
+          configMapFilename="config.json";
+          variablesFilename="variables.json";
+          secretsFilename="secrets.json";      
+
+          /* App Env */
+          if (fileExists("${appEnvPath}/${configMapFilename}")) {
+            appConfig = readJSON file: "${appEnvPath}/${configMapFilename}"
+          }
+          if (fileExists("${appEnvPath}/${variablesFilename}")) {
+            appEnv = readJSON file: "${appEnvPath}/${variablesFilename}"
+          }
+          if (fileExists("${appEnvPath}/${secretsFilename}")) {
+            appSecret = readJSON file: "${appEnvPath}/${secretsFilename}"
+          }
+          /* Build Config Env */
+          if (fileExists("${bcEnvPath}/${configMapFilename}")) {
+            bcConfig = readJSON file: "${bcEnvPath}/${configMapFilename}"
+          }
+          if (fileExists("${bcEnvPath}/${variablesFilename}")) {
+            bcEnv = readJSON file: "${bcEnvPath}/${variablesFilename}"
+          }
+          if (fileExists("${bcEnvPath}/${secretsFilename}")) {
+            bcSecret = readJSON file: "${bcEnvPath}/${secretsFilename}"
+          }
+          /* Deployment Config Env */
+          if (fileExists("${dcEnvPath}/${configMapFilename}")) {
+            echo "Found: ${dcEnvPath}/${configMapFilename}"
+            dcConfig = readJSON file: "${dcEnvPath}/${configMapFilename}"
+            echo "Loaded: ${dcConfig}"
+          }
+          if (fileExists("${dcEnvPath}/${variablesFilename}")) {
+            dcEnv = readJSON file: "${dcEnvPath}/${variablesFilename}"
+          }
+          if (fileExists("${dcEnvPath}/${secretsFilename}")) {
+            dcSecret = readJSON file: "${dcEnvPath}/${secretsFilename}"
+          }
+          /* Patches */
+          if (fileExists("${patchEnvPath}/patches.json")) {
+            patches = readJSON file: "${patchEnvPath}/patches.json"
+          }
+          /* Templates */
+          if (fileExists("${templateEnvPath}/template.json")) {
+            templates = readJSON file: "${templateEnvPath}/template.json"
+          }
+          if (fileExists("${templateEnvPath}/template.yaml")) {
+            templates = readJSON file: "${templateEnvPath}/template.yaml"
+          }
+          if (fileExists("${templateEnvPath}/templates.yml")) {
+            templates = readJSON file: "${templateEnvPath}/templates.yml"
+          }
+
+          openshift.withCluster() {
+              echo "=== Preamble Init ==="             
+              echo "App path: ${appPath}"
+              echo "Environment: ${firstEnv}"              
+              echo "${rootProjectPath}"
+              echo "Os sub-diretórios de projetos/${env.appName}/${firstEnv} e arquivos que serão carregados, são:"
+              echo "app-env/config.json"              
+              echo "app-env/variables.json"
+              echo "app-env/secrets.json"
+              echo "bc-env/config.json"
+              echo "bc-env/variables.json"
+              echo "bc-env/secrets.json"
+              echo "dc-env/config.json"
+              echo "dc-env/variables.json"
+              echo "dc-env/secrets.json"
+              echo "patches/patches.json"
+              echo "templates/template.json ou templates/template.yaml ou templates/template.yml"
+              echo "=== Preamble Done ==="
+          }
+        }
+      }
+    }
+
+    stage('Checkout Source') {
+      steps {
+        git branch: env.refs,
+            credentialsId: "${namespace}-${env.sourceRepoCredentialsId}",
+            url: env.sourceRepoUrl
+        script {
+          try {
+            unstash "devops-resouces-mvn-settings"
+          } catch (error) {
+            echo "error unstashing: ${error}"
+          }
+
+          try {
+            unstash "devops-resources-project"
+          } catch (error) {
+            echo "error unstashing: ${error}"
+          }
+        }
+      }
+    }
+
+   stage('Package') {
+      steps {
+        script {
+          sh "${common.getMvnCmd()}  clean package -DskipTests=true"
+        }
+      }
+    }
+
+   stage('Prepare Artifacts') {
+      when { expression { fileExists("./projetos/${appName}/java.springboot/prepare-artifacts.sh") } }      
+      steps {
+        script {
+          sh "./prepare-artifacts.sh"
+        }
+      }
+    }
+    
+    stage('Test') {
+      steps {
+        script {
+          sh "${common.getMvnCmd()}  test"
+        }
+      }
+    }
+    
+    stage('Quality Analysis'){
+      steps {
+          script {
+            try {
+              /* TODO: Usar lib */
+              sh "${common.getMvnCmd()}  sonar:sonar"
+            }catch (err) {
+              echo "Step Failed: ${err}"
+            }    
+          } 
+      }
+    }    
+    
+    stage('Publish Artifact') {
+       steps {
+          script {
+            try {
+              sh "${common.getMvnCmd()}  deploy"
+            }catch (err) {
+              echo "Step Failed: ${err}"
+            }                
+          }
+      }
+    }
+    
+    stage('Create Project') {
+      steps {
+        script {
+            projectName=common.createProject("${namespace}", "${appName}", "${firstEnv}")
+			echo "Project name: ${projectName}"
+        }
+      }
+    }
+    
+    stage('Create Image Builder') {
+      when {
+        expression {
+          openshift.withCluster() {
+            openshift.withProject("${namespace}") {
+              def bc = "";
+              try {
+                bc = openshift.selector("bc", "ib-${projectName}");
+			    return bc.exists();
+              }catch(err) {
+                return true;
+              }
+            }
+          }
+        }
+      }
+
+      steps {
+        script {
+          imageBuilder.createS2IBinary("${namespace}", "${appName}", "${firstEnv}", "${baseImageStream}")
+        }
+      }
+    }
+
+    stage('Image Builder') {
+      steps {
+        script {
+          imageBuilder.startBinary("${namespace}", "${appName}", "${firstEnv}", "target")
+        }
+      }
+    }
+    
+    stage('Deploy') {
+      steps {
+        script {
+            // ENVIRONMENT VARIABLES
+            def options = ""
+			echo "Loading app env variables";
+            if (fileExists("${appEnvPath}/${variablesFilename}")) {
+              for (key in appEnv.keySet()) {
+                options = options + " -e ${key}=\"${appEnv.get(key)}\""
+              }
+            }
+
+			echo "Loading dc env variables";
+            if (fileExists("${dcEnvPath}/${variablesFilename}")) {
+              for (key in dcEnv.keySet()) {
+                options = options + " -e ${key}=\"${dcEnv.get(key)}\""
+              }
+            }
+
+            deploy.execute("${namespace}", "${appName}", "${appVersion}", "${firstEnv}", "${options}")
+
+            openshift.withCluster() {
+              openshift.withProject("${projectName}") {
+                def appDeploymentConfig = openshift.selector("dc", "${appName}")
+                def paused = false
+
+                // CONFIG MAPS
+                echo "Config maps"
+                if (fileExists("${dcEnvPath}/${configMapFilename}")) {
+                  echo "Found: ${dcEnvPath}/${configMapFilename}"
+                  echo "Unloading: ${dcConfig}"
+                  for (mapName in dcConfig.keySet()) {
+                    echo "Map name: [${mapName}]"
+                    if (!openshift.selector("configmap", "${mapName}").exists()) {
+
+                      if(!paused) {
+                        appDeploymentConfig.rollout().pause()
+                        paused = true;
+                      }
+
+                      def mapData = dcConfig.get(mapName);
+                      //oc create secret generic db-secret --from-literal=username=user --from-literal=password=p455w0rd
+                      def literals = "";
+                      echo "Creating config map from literals"
+                      for (key in mapData.keySet()) {
+                        literals = literals + "--from-literal ${key}=\"${mapData.get(key)}\" "
+                      }
+
+                      openshift.create("configmap",
+                        "${mapName}",
+                        "${literals}")
+                      openshift.set("env",
+                        "--from=configmap/${mapName}",
+                        "dc/${appName}")
+                    }
+                  }
+                }
+                // SECRETS
+				echo "Loading dc env secrets";
+                if (fileExists("${dcEnvPath}/${secretsFilename}")) {
+                  for (secretName in dcSecret.keySet()) {
+                    if (!openshift.selector("secret", "${secretName}").exists()) {
+
+                      if(!paused) {
+                        appDeploymentConfig.rollout().pause()
+                        paused = true;
+                      }
+
+                      def secretData = dcSecret.get(secretName)
+                      //oc create secret generic db-secret --from-literal=username=user --from-literal=password=p455w0rd
+                      def literals = ""
+
+                      for (key in secretData.keySet()) {
+                        literals = literals + "--from-literal ${key}=\"${secretData.get(key)}\" "
+                      }
+
+                      openshift.create("secret",
+                        "generic",
+                        "${secretName}",
+                        "${literals}")
+                      openshift.set("env",
+                        "--from=secret/${secretName}",
+                        "dc/${appName}")
+                    }
+                  }
+                }
+
+                if (paused) {
+                  appDeploymentConfig.rollout().resume()
+                }
+              }
+            }          
+
+        }
+      }
+    }
+
+     stage('Criar rota') {
+      steps {
+        script {
+          common.exposeService("${appName}", "${firstEnv}")
+        }
+      }
+    }
+    
+  }
+}

@@ -1,0 +1,44 @@
+<settings>
+  <servers>
+    <server>
+        <id>prodesp-repo</id>
+        <username>admin</username>
+        <password>admin123</password>
+    </server>
+  </servers>
+
+  <mirrors>
+    <mirror>
+      <id>central-prodesp</id>
+      <name>Central PRODESP</name>
+      <url>http://nexus-cicd.apps.cluster-4117.4117.sandbox235.opentlc.com/repository/maven-public/</url>
+      <mirrorOf>central</mirrorOf>
+    </mirror>
+  </mirrors>
+
+  <profiles>
+    <profile>
+      <id>prodesp</id>
+      <repositories>
+        <repository>
+          <id>maven-public</id>
+		      <url>http://nexus-cicd.apps.cluster-4117.4117.sandbox235.opentlc.com/repository/maven-public/</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>true</enabled></snapshots>
+        </repository>
+      </repositories>
+      <pluginRepositories>
+        <pluginRepository>
+          <id>maven-public-plugin</id>
+		      <url>http://nexus-cicd.apps.cluster-4117.4117.sandbox235.opentlc.com/repository/maven-public/</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>true</enabled></snapshots>
+        </pluginRepository>
+      </pluginRepositories>
+    </profile>
+  </profiles>
+  
+  <activeProfiles>
+    <activeProfile>prodesp</activeProfile>
+  </activeProfiles>
+</settings>

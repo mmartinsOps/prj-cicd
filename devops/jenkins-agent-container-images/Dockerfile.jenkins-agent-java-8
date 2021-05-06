@@ -1,0 +1,9 @@
+FROM registry.redhat.io/rhel8/skopeo AS builder
+
+FROM quay.io/openshift/origin-jenkins-agent-maven:4.7.0
+
+USER root
+
+COPY --from=builder /usr/bin/skopeo /usr/bin/skopeo
+
+USER 1001

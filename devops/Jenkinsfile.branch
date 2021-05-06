@@ -1,0 +1,34 @@
+node('master') {
+
+  def appName = env.appName
+  def appCode = env.code
+
+  stage ('Branch Source Sync') {
+
+    checkout scm
+
+    variables = readJSON file: 'environment/git/variables.json'
+    namespace = variables["devops-namespace"];
+    echo "Namespace: ${namespace}"
+
+    builder = load 'devops-resources/builder.groovy'
+
+    def branches = builder.getBranches(env.sourceRepoUrl, "${namespace}-${env.sourceRepoCredentialsId}", "${appName}")
+	echo "Branches: ${branches}"
+    def bcNames = builder.getBuilds("${namespace}")
+	echo "Builds: ${bcNames}"
+
+    builder.createBuilds(branches, "${appName}", "${appCode}", "${namespace}")
+
+    // Remove old builds
+    for (name in bcNames) {
+      name = name.replaceAll("buildconfig/", "")
+      name = name.replaceAll("release-", "release/")
+      if (!branches.contains(name) && name.contains("${appName}-release")) {
+        name = name.replaceAll("/","-")
+        builder.delete(name, "${namespace}")
+      }
+    }
+
+  }
+}

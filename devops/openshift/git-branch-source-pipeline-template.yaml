@@ -1,0 +1,122 @@
+kind: Template
+apiVersion: template.openshift.io/v1
+metadata:
+  name: git-branch-source-pipeline
+  annotations:
+    description: |-
+      Multibranch scanner pipeline build.
+
+      NOTE: You must have git access to use this template.
+    iconClass: icon-jenkins
+    openshift.io/display-name: Git Branch Source Pipeline
+    openshift.io/long-description: This template deploys a  git repo branch scanner pipeline build.
+    openshift.io/provider-display-name: Companhia de Processamento de Dados do Estado de São Paulo.
+    tags: 'pipeline,build'
+labels:
+  template: git-branch-source-pipeline-template
+  message: Template para criar pipelines que buscam branches no repositorio de codigo (Git)
+ e gera novos pipelines para cada uma das branches encontradas.
+objects:
+  - kind: BuildConfig
+    apiVersion: build.openshift.io/v1
+    metadata:
+      name: '${PROJECT_APP_NAME}-branch-source'
+      namespace: cicd
+    labels:
+      app: '${PROJECT_APP_NAME}-branch-source'
+      name: '${PROJECT_APP_NAME}-branch-source'
+    spec:
+      nodeSelector: {}
+      output: {}
+      resources: {}
+      successfulBuildsHistoryLimit: 5
+      failedBuildsHistoryLimit: 5
+      strategy:
+        type: JenkinsPipeline
+        jenkinsPipelineStrategy:
+          jenkinsfilePath: Jenkinsfile.branch
+          env:
+            - name: appName
+              value: '${PROJECT_APP_NAME}'
+            - name: appPath
+              value: '${PROJECT_APP_PATH}'
+            - name: baseImageStream
+              value: '${PROJECT_BASE_IMAGE}'
+            - name: refs
+              value: '${PROJECT_SOURCE_GIT_REPO_BRANCH}'
+            - name: sourceRepoCredentialsId
+              value: '${PROJECT_SOURCE_CREDENTIALS_ID}'
+            - name: sourceRepoUrl
+              value: '${PROJECT_SOURCE_GIT_REPO_URL}'
+            - name: code
+              value: '${PROJECT_SOURCE_LANGUAGE}'
+      postCommit: {}
+      source:
+        type: Git
+        git:
+          uri: '${DEVOPS_RESOURCES_GIT_REPO_URL}'
+          ref: '${DEVOPS_RESOURCES_GIT_REPO_BRANCH}'
+        sourceSecret:
+          name: '${DEVOPS_RESOURCES_GIT_REPO_SOURCE_SECRET}'
+      triggers:
+        - type: GitLab
+          gitlab:
+            secret: '${WEBHOOK_SECRET}'
+        - type: Generic
+          generic:
+            secret: '${WEBHOOK_SECRET}'
+      runPolicy: Serial
+parameters:
+  - name: PROJECT_APP_NAME
+    displayName: Nome da aplicação
+    description: O nome da aplicação que será construída
+    required: true
+  - name: PROJECT_BASE_IMAGE
+    displayName: Nome da imagem base
+    description: O nome da imagem de container base para criação da aplicação
+    required: true
+  - name: PROJECT_APP_PATH
+    displayName: Diretório para build
+    description: Diretório do código fonte para build da aplicação
+  - name: PROJECT_SOURCE_GIT_REPO_BRANCH
+    displayName: Branch do repositório git
+    description: Branch do repositório de código (Git) para criação da aplicação
+    required: true
+  - name: PROJECT_SOURCE_CREDENTIALS_ID
+    displayName: Nome da secret do repositório git
+    description: Nome da secret do repositório de código (Git) para criação da aplicação
+    value: devops-git
+    required: true
+  - name: PROJECT_SOURCE_GIT_REPO_URL
+    displayName: URL do repositório git
+    description: URL do repositório de código (Git) para criação da aplicação
+    required: true
+  - name: PROJECT_SOURCE_LANGUAGE
+    displayName: Linguagem do código fonte
+    description: >-
+      Linguagem de programação e/ou tecnologia usada para desenvolvimento da
+      aplicação que será criada (html, java.springboot, js.angular)
+    required: true
+  - name: DEVOPS_RESOURCES_GIT_REPO_URL
+    displayName: Devops Git URL
+    description: URL do repositório com recursos devops
+    value: >-
+      http://gogs-cicd.apps.cluster-4117.4117.sandbox235.opentlc.com/PRODESP/devops.git
+    required: true
+  - name: DEVOPS_RESOURCES_GIT_REPO_BRANCH
+    displayName: Devops Git Branch
+    description: O nome da branch com os recusos devops
+    value: master
+    required: true
+  - name: DEVOPS_RESOURCES_GIT_REPO_SOURCE_SECRET
+    displayName: Devops Source Secret
+    description: O nome da secret para acessar repositório com recursos devops
+    value: devops-git
+    required: true
+  - name: WEBHOOK_SECRET
+    displayName: Secret
+    description: Valor secreto para a configuração de webhooks
+    generate: expression
+    from: '[a-zA-Z0-9]{40}'
+labels:
+  template: git-branch-source-pipeline-template
